@@ -1,6 +1,0 @@
-# Team 3, E8: 350M AdamW vs Muon on A100 (bf16 for both). 7B tokens = 20 tokens/parameter, class 350M recipe.
-# Learning rates are set by team3/experiments/e8_350m_a100.sh from the 50M-100M-200M trend (E1, E1b, E5).
-extends: ../350m.yaml
-run:
-  out_dir: ${GW1B_SCRATCH}/teams/team3/runs
-  eval_seqs: 512
