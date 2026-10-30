@@ -124,3 +124,33 @@ def test_rerun_into_same_out_leaves_nothing_stale(tmp_path):
     assert [r["run"] for r in csv.DictReader(open(os.path.join(out, "runs.csv")))] == ["team3-e1b-adamw-lr6e-4-wd0.1-s0"]
     assert not [f for f in os.listdir(out) if f.startswith(("curves_", "lr_"))]  # the first run's plots are gone
     assert os.path.exists(keep)                                       # files the script did not write stay
+
+
+def test_diverged_selected_seed_blocks_multiplier(tmp_path):
+    runs = str(tmp_path / 'runs')
+    fake_run(runs, 'team3-adamw', 'adamw', 6e-4, 3.5)
+    fake_run(runs, 'team3-muon-s0', 'muon', 6e-4, 3.0)
+    fake_run(runs, 'team3-muon-s1', 'muon', 6e-4, float('nan'), seed=1,
+             losses=[4.0, 3.0, float('nan'), float('nan')])
+    best = scale_report.best_settings([scale_report.load_run(os.path.join(runs, n)) for n in os.listdir(runs)])
+    m = scale_report.multiplier(best)
+    assert (m['muon_seeds_reaching'], m['muon_seeds']) == (1, 2)
+    assert m['token_share'] is None and m['time_share'] is None
+
+
+def test_nonfinite_interpolation_is_not_a_reached_target():
+    assert scale_report.tokens_to_reach(np.array([[1., float('nan')], [2., 3.]]), 3.5) is None
+
+
+def test_group_key_preserves_exact_budget():
+    r = dict(params_m=50, tok_per_param=10, dtype='float32', schedule='cosine', tokens_planned=500_000_000)
+    assert scale_report.group_key(r) != scale_report.group_key(r | {'tokens_planned': 510_000_000})
+
+
+def test_empty_selection_clears_old_outputs(tmp_path):
+    runs, out = str(tmp_path / 'runs'), str(tmp_path / 'report')
+    fake_run(runs, 'team3-adamw', 'adamw', 6e-4, 3.5)
+    scale_report.main([runs, '--out', out, '--no-plots'])
+    with pytest.raises(SystemExit, match='no runs'):
+        scale_report.main([runs, '--prefix', 'absent-', '--out', out, '--no-plots'])
+    assert not any(os.path.exists(os.path.join(out, f)) for f in ('runs.csv', 'best.csv', 'multipliers.csv'))

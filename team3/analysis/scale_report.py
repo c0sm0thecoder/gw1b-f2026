@@ -4,7 +4,7 @@
     gw1b python team3/analysis/scale_report.py <runs dir> --prefix team3-e1- --out e1_report   # one experiment
 
 Reads every run directory (config.yaml + metrics.jsonl, summary.json once finished) and groups runs by model size,
-tokens per parameter, precision and schedule. E0 pilots are left out (--exclude). Per group it picks each optimizer's
+tokens per parameter, exact token budget, precision and schedule. E0 pilots are left out (--exclude). Per group it picks each optimizer's
 best setting (lowest final validation loss at seed 0, finished runs only; diverged runs, whose loss is not finite,
 never win) and averages its seeds. Writes to --out:
 
@@ -12,7 +12,8 @@ never win) and averages its seeds. Writes to --out:
                         step time, diverged
     best.csv            per group and optimizer: best lr / wd, mean and spread over seeds, number of seeds
     multipliers.csv     per group: share of AdamW's tokens Muon needs to reach AdamW's final loss, and the same in
-                        wall-clock (tokens share x step-time ratio); empty unless every Muon seed reaches it
+                        wall-clock (tokens share x step-time ratio); empty unless every finished Muon seed reaches it
+                        (diverged seeds count as failures)
     curves_<group>.png  validation loss vs tokens of each optimizer's best setting, every seed
     lr_<group>.png      final validation loss vs peak learning rate, per optimizer and weight decay
     scale.png           best loss and Muon's token share vs model size, one series per tokens/parameter ratio
@@ -73,11 +74,13 @@ def load_run(run_dir: str) -> dict | None:
 
 
 def group_key(r: dict) -> str:
-    return f"{r['params_m']}M-{r['tok_per_param']}tpp-{r['dtype']}-{r['schedule']}"
+    return f"{r['params_m']}M-{r['tok_per_param']}tpp-{r['dtype']}-{r['schedule']}-{r['tokens_planned']}tok"
 
 
 def tokens_to_reach(curve: np.ndarray, target: float) -> float | None:
     """First token count at which a validation curve reaches `target`, interpolated between evaluations."""
+    if not np.isfinite(target) or not np.isfinite(curve).all():
+        return None
     below = np.nonzero(curve[:, 1] <= target)[0]
     if not len(below):
         return None
@@ -90,7 +93,7 @@ def tokens_to_reach(curve: np.ndarray, target: float) -> float | None:
 
 def best_settings(runs: list[dict]) -> dict[str, dict]:
     """Per optimizer: the (lr, wd) with the lowest finished seed-0 loss, and all finished seeds of it. Diverged runs
-    (non-finite loss) are left out: min() would otherwise keep a NaN that comes first."""
+    (non-finite loss) cannot win or enter finite-loss means, but remain failures for target-reaching statistics."""
     out = {}
     ok = [r for r in runs if r["finished"] and not r["diverged"]]
     for opt in OPTIMIZERS:
@@ -103,7 +106,9 @@ def best_settings(runs: list[dict]) -> dict[str, dict]:
         losses = [r["final_val"] for r in seeds]
         out[opt] = {"lr": b["lr"], "wd": b["wd"], "seeds": seeds, "mean": statistics.mean(losses),
                     "sd": statistics.stdev(losses) if len(losses) > 1 else float("nan"),
-                    "step_time_s": statistics.median(r["step_time_s"] for r in seeds)}
+                    "step_time_s": statistics.median(r["step_time_s"] for r in seeds),
+                    "failed_seeds": [r for r in runs if r["finished"] and r["diverged"]
+                                     and r["optimizer"] == opt and r["lr"] == b["lr"] and r["wd"] == b["wd"]]}
     return out
 
 
@@ -114,7 +119,8 @@ def multiplier(best: dict[str, dict]) -> dict | None:
         return None
     a, m = best["adamw"], best["muon"]
     target, budget = a["mean"], a["seeds"][0]["curve"][-1, 0]
-    reach = [tokens_to_reach(r["curve"], target) for r in m["seeds"]]
+    # Keep failed replications in the denominator even though they cannot enter finite-loss means.
+    reach = [tokens_to_reach(r["curve"], target) for r in m["seeds"]] + [None] * len(m.get("failed_seeds", []))
     shares = [t / budget for t in reach if t is not None]
     all_reach = len(shares) == len(reach)
     step_ratio = m["step_time_s"] / a["step_time_s"]
@@ -207,12 +213,12 @@ def main(argv: list[str] | None = None) -> None:
     runs = [r for root in a.roots for d in sorted(glob.glob(os.path.join(root, a.prefix + "*")))
             if os.path.isdir(d) and not os.path.basename(d).startswith(tuple(a.exclude))
             and (r := load_run(d)) is not None and r["optimizer"] in OPTIMIZERS]
-    if not runs:
-        raise SystemExit(f"no runs with validation points under {a.roots} matching {a.prefix}*")
     os.makedirs(a.out, exist_ok=True)
     for pattern in OUTPUTS:  # a rerun into the same --out must not keep tables or plots of an earlier selection
         for f in glob.glob(os.path.join(a.out, pattern)):
             os.remove(f)
+    if not runs:
+        raise SystemExit(f"no runs with validation points under {a.roots} matching {a.prefix}*")
     groups: dict[str, list[dict]] = {}
     for r in runs:
         groups.setdefault(group_key(r), []).append(r)
