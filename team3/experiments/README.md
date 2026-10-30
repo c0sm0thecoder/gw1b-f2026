@@ -25,9 +25,10 @@ Python on the login node runs inside the class environment: `gw1b python <script
 | `e1_tune_50m.sh stage1` | E1: AdamW and Muon, 5 learning rates at weight decay 0.1 | 10 |
 | `e1_tune_50m.sh stage2 <adamw lrs> <muon lrs>` | E1: weight decay 0.3 and 1.0 at each optimizer's best 3 learning rates | 12 |
 | `e1_tune_50m.sh seeds <adamw lr> <wd> <muon lr> <wd>` | E1: seeds 1 and 2 of each optimizer's winner | 4 |
-| `e1b_lr_100m.sh <center lr> [wd]` | E1b: AdamW at 100M, 0.5x / 1x / 2x the value extrapolated from 50M | 3 |
+| `e1b_lr_100m.sh sweep <adamw lr> <wd> <muon lr> <wd>` | E1b: both optimizers at 100M, 0.5x / 1x / 2x a centre learning rate each | 6 |
+| `e1b_lr_100m.sh wsd <adamw lr> <wd> <muon lr> <wd>` | E1b: each optimizer's best 100M setting with a WSD schedule (decay over the last 20%) | 2 |
 
-Order: `e0_pilot.sh` (all four stages) → `estimate_cost.py` → E1 stage1 → stage2 → seeds → E1b.
+Order: `e0_pilot.sh` (all four stages) → `estimate_cost.py` → E1 stage1 → stage2 → seeds → E1b sweep → E1b wsd.
 
 Conventions used by every run:
 

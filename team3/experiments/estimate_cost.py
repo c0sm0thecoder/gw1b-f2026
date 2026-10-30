@@ -45,7 +45,8 @@ def main() -> None:
     plan = [  # (label, runs, tokens per run, tokens/s)
         ("E1 AdamW, 50M (11 tuning + 2 seeds)", 13, tok50, tps_a),
         ("E1 Muon, 50M (11 tuning + 2 seeds)", 13, tok50, tps_m),
-        ("E1b AdamW, 100M (3 runs)", 3, tok100, tps_a * scale_100),
+        ("E1b AdamW, 100M (3 sweep + 1 WSD)", 4, tok100, tps_a * scale_100),
+        ("E1b Muon, 100M (3 sweep + 1 WSD)", 4, tok100, tps_m * scale_100),
     ]
     total = 0.0
     for label, n, tokens, tps in plan:
@@ -53,7 +54,7 @@ def main() -> None:
         gpu_h = n * hours * n_dev
         total += gpu_h
         print(f"{label:<40} {n:>2} runs x {hours:5.1f} h wall on {n_dev} GPUs = {gpu_h:8,.0f} GPU-hours")
-    print(f"{'total':<40} {total:31,.0f} GPU-hours  (plan estimate: about 800 V100-hours)")
+    print(f"{'total':<40} {total:31,.0f} GPU-hours")
 
 
 if __name__ == "__main__":
