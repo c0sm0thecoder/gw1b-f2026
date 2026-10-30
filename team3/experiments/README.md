@@ -27,12 +27,15 @@ Python on the login node runs inside the class environment: `gw1b python <script
 | `e1_tune_50m.sh seeds <adamw lr> <wd> <muon lr> <wd>` | E1: seeds 1 and 2 of each optimizer's winner | 4 |
 | `e1b_lr_100m.sh sweep <adamw lr> <wd> <muon lr> <wd>` | E1b: both optimizers at 100M, 0.5x / 1x / 2x a centre learning rate each | 6 |
 | `e1b_lr_100m.sh wsd <adamw lr> <wd> <muon lr> <wd>` | E1b: each optimizer's best 100M setting with a WSD schedule (decay over the last 20%) | 2 |
+| `e5_ladder_200m.sh <adamw lr> <wd> <muon lr> <wd>` | E5: both optimizers at 200M, 4B tokens, 0.5x / 1x / 2x a centre learning rate each; chains of 1-day jobs | 6 |
 
-Order: `e0_pilot.sh` (all four stages) → `estimate_cost.py` → E1 stage1 → stage2 → seeds → E1b sweep → E1b wsd.
+Order: `e0_pilot.sh` (all four stages) → `estimate_cost.py` → E1 stage1 → stage2 → seeds → E1b sweep → E1b wsd → E5.
 
 Conventions used by every run:
 
 - V100s, 4 GPUs per job, float32 for both optimizers (`configs/team3/*.yaml`).
+- About 20 training tokens per parameter at every size (1B at 50M, 2B at 100M, 4B at 200M), and each optimizer's
+  learning rate tuned at every size.
 - Every run is scored on the same 512 validation windows (`run.eval_seqs=512`).
 - Seeds are paired: `run.seed` (initialization) and `data.seed` (data order) take the same value.
 - Weight decay uses the optax convention (multiplied by the learning rate).
