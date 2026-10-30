@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Team 3, E1b: peak learning rate at 100M on V100 (float32), both optimizers, 2B tokens each (20 tokens/parameter).
+# Team 3, E1b: peak learning rate at 100M on V100 (float32), both optimizers, 1B tokens each (10 tokens/parameter).
 #
 # Sweep: 0.5x / 1x / 2x a centre learning rate per optimizer, cosine schedule (6 runs)
 #   bash team3/experiments/e1b_lr_100m.sh sweep <adamw_lr> <adamw_wd> <muon_lr> <muon_wd>
@@ -15,11 +15,12 @@
 # only in shape; E2 compares schedules (including decay to zero) in full.
 source "$(dirname "$0")/_common.sh"
 STAGE="${1:-}"
-COMMON="--gpus 4 --gpu-type v100 --time 1-12:00:00 --config configs/team3/e1b_100m.yaml"
+COMMON="--gpus 4 --gpu-type v100 --time 16:00:00 --config configs/team3/e1b_100m.yaml"
+TOK=tok1B
 
 run() {  # run <experiment> <optimizer> <lr> <wd> [extra --set args...]
   local exp="$1" opt="$2" lr="$3" wd="$4"; shift 4
-  emit $COMMON --set run.name="team3-$exp-$opt-lr$lr-wd$wd-s0" --set optim.name="$opt" \
+  emit $COMMON --set run.name="team3-$exp-$opt-lr$lr-wd$wd-$TOK-s0" --set optim.name="$opt" \
     --set optim.lr="$lr" --set optim.weight_decay="$wd" $(seed_args 0) "$@"
 }
 
