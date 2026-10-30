@@ -1,6 +1,6 @@
 """Price the E1/E1b sweeps from measured pilot throughput (run after e0_pilot.sh adamw and muon).
 
-    python team3/experiments/estimate_cost.py $GW1B_SCRATCH/teams/team3/runs/team3-e0-pilot-adamw-50m \\
+    gw1b python team3/experiments/estimate_cost.py $GW1B_SCRATCH/teams/team3/runs/team3-e0-pilot-adamw-50m \\
         --muon $GW1B_SCRATCH/teams/team3/runs/team3-e0-pilot-muon-50m
 
 Uses the median tokens/s of the pilot after its first log lines (compilation), scales to 100M by FLOPs per token,

@@ -1,8 +1,14 @@
 # Team 3 launch scripts
 
-Each script prints the `gw1b train` commands it would run; add `--submit` to queue them. Run them from a
-checkout of this branch on Pegasus, activated so that jobs use this branch's code (Muon, `run.eval_seqs`)
-rather than the shared class copy:
+Each script prints the `gw1b train` commands it would run; add `--submit` to queue them. Run them from the class
+checkout, which includes the Team 3 code (Muon, `run.eval_seqs`) since it was merged:
+
+```bash
+cd /SEAS/groups/gw1b-class/gw1b-f2026      # the scripts use paths relative to the checkout
+```
+
+To test a branch that is not merged yet, use your own checkout of it instead (setting `PYTHONPATH` alone is not
+enough: the class copy is always placed first):
 
 ```bash
 cp -n /SEAS/groups/gw1b-class/gw1b-f2026/gw1b.local.env <checkout>/   # once: site settings (git-ignored)
@@ -10,12 +16,12 @@ source <checkout>/activate.sh                                       # each sessi
 cd <checkout>
 ```
 
-Setting `PYTHONPATH` alone is not enough: the class copy is always placed first.
+Python on the login node runs inside the class environment: `gw1b python <script>`, not `python <script>`.
 
 | Script | Experiment | Runs |
 |---|---|---|
-| `e0_pilot.sh smoke\|adamw\|resume\|muon` | E0: tiny end-to-end run; 50M AdamW pilot (200 steps); resume to 300 steps; 50M Muon pilot | 1 each |
-| `estimate_cost.py <adamw pilot> --muon <muon pilot>` | Prices E1 and E1b from the pilots' measured throughput | none |
+| `e0_pilot.sh smoke\|adamw\|resume\|muon` | E0: tiny model on the class data; 50M AdamW pilot (200 steps); resume to 300 steps; 50M Muon pilot | 1 each |
+| `gw1b python estimate_cost.py <adamw pilot> --muon <muon pilot>` | Prices E1 and E1b from the pilots' measured throughput | none |
 | `e1_tune_50m.sh stage1` | E1: AdamW and Muon, 5 learning rates at weight decay 0.1 | 10 |
 | `e1_tune_50m.sh stage2 <adamw lrs> <muon lrs>` | E1: weight decay 0.3 and 1.0 at each optimizer's best 3 learning rates | 12 |
 | `e1_tune_50m.sh seeds <adamw lr> <wd> <muon lr> <wd>` | E1: seeds 1 and 2 of each optimizer's winner | 4 |
