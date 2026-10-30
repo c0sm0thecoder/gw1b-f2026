@@ -15,11 +15,12 @@ import numpy as np  # noqa: E402
 from gw1b.config import load_config, save_config  # noqa: E402
 import scale_report  # noqa: E402
 
-SIZE_50M = os.path.join(ROOT, "configs", "team3", "e1_50m.yaml")
+SIZE_50M = os.path.join(ROOT, "configs", "team3", "e1_50m.yaml")       # 10 tokens/parameter
 
 
-def fake_run(root, name, opt, lr, final, seed=0, schedule="cosine", step_time=1.0, finished=True):
-    """A run whose validation loss falls linearly from final + 1 to `final` over 4 evaluations of 250M tokens."""
+def fake_run(root, name, opt, lr, final, seed=0, schedule="cosine", step_time=1.0, finished=True, losses=None):
+    """A run whose validation loss falls linearly from final + 1 to `final` over 4 evaluations of 250M tokens
+    (or follows `losses`)."""
     d = os.path.join(root, name)
     os.makedirs(d)
     cfg = load_config(SIZE_50M, [f"optim.name={opt}", f"optim.lr={lr}", f"run.seed={seed}",
@@ -28,7 +29,7 @@ def fake_run(root, name, opt, lr, final, seed=0, schedule="cosine", step_time=1.
     with open(os.path.join(d, "metrics.jsonl"), "w") as f:
         for i in range(4):
             f.write(json.dumps({"step": i, "perf/step_time_s": step_time}) + "\n")
-        for i, loss in enumerate(np.linspace(final + 1, final, 4), start=1):
+        for i, loss in enumerate(np.linspace(final + 1, final, 4) if losses is None else losses, start=1):
             f.write(json.dumps({"step": 1000 * i, "tokens_seen": 250_000_000 * i, "val/loss": loss}) + "\n")
     if finished:
         json.dump({"finished": True}, open(os.path.join(d, "summary.json"), "w"))
@@ -51,9 +52,11 @@ def test_scale_report_best_settings_and_multiplier(tmp_path):
     fake_run(runs, "team3-e1-muon-lr2.4e-3-wd0.1-s0", "muon", 2.4e-3, 3.2, step_time=1.1)
     fake_run(runs, "team3-e1bwsd-muon-lr6e-4-wd0.1-s0", "muon", 6e-4, 2.9, schedule="wsd")  # separate group
     fake_run(runs, "other-team-run", "adamw", 6e-4, 1.0)                              # not team3-: ignored
+    fake_run(runs, "team3-e0-pilot-adamw-50m", "adamw", 6e-4, 1.0)                    # E0 pilot: excluded
     out = str(tmp_path / "report")
     scale_report.main([runs, "--out", out])
 
+    assert all("e0-pilot" not in r["run"] for r in csv.DictReader(open(os.path.join(out, "runs.csv"))))
     best = {(r["group"], r["optimizer"]): r for r in csv.DictReader(open(os.path.join(out, "best.csv")))}
     cosine = next(g for g, _ in best if "cosine" in g)
     assert float(best[cosine, "adamw"]["lr"]) == 6e-4 and int(best[cosine, "adamw"]["n_seeds"]) == 2
@@ -68,3 +71,37 @@ def test_scale_report_best_settings_and_multiplier(tmp_path):
     assert float(mult["time_share"]) == pytest.approx(0.605)
     for f in ("runs.csv", "scale.png", f"curves_{cosine}.png", f"lr_{cosine}.png"):
         assert os.path.exists(os.path.join(out, f)), f
+
+
+def test_diverged_run_never_wins(tmp_path, capsys):
+    runs = str(tmp_path / "runs")
+    nan = float("nan")
+    fake_run(runs, "team3-e1-adamw-lr1.2e-3-wd0.1-s0", "adamw", 1.2e-3, nan, losses=[5.0, 4.0, nan, nan])  # sorts first
+    fake_run(runs, "team3-e1-adamw-lr6e-4-wd0.1-s0", "adamw", 6e-4, 3.5)
+    out = str(tmp_path / "report")
+    scale_report.main([runs, "--out", out, "--no-plots"])
+    (row,) = csv.DictReader(open(os.path.join(out, "best.csv")))
+    assert float(row["lr"]) == 6e-4 and float(row["mean"]) == pytest.approx(3.5)
+    assert "diverged" in capsys.readouterr().out
+
+
+def test_token_share_needs_every_muon_seed(tmp_path):
+    runs = str(tmp_path / "runs")
+    fake_run(runs, "team3-e1-adamw-lr6e-4-wd0.1-s0", "adamw", 6e-4, 3.5)
+    fake_run(runs, "team3-e1-muon-lr6e-4-wd0.1-s0", "muon", 6e-4, 3.0)              # reaches 3.5 at 625M tokens
+    fake_run(runs, "team3-e1-muon-lr6e-4-wd0.1-s1", "muon", 6e-4, 3.6, seed=1)      # never reaches 3.5
+    out = str(tmp_path / "report")
+    scale_report.main([runs, "--out", out, "--no-plots"])
+    (m,) = csv.DictReader(open(os.path.join(out, "multipliers.csv")))
+    assert (m["muon_seeds_reaching"], m["muon_seeds"]) == ("1", "2")
+    assert m["token_share"] == "" and m["time_share"] == ""                      # not the one seed's 62.5%
+
+
+def test_scale_trend_keeps_token_budgets_apart():
+    row = lambda size, tpp, loss, schedule="cosine": {"params_m": size, "tok_per_param": tpp, "schedule": schedule,
+                                                       "loss": loss}
+    rows = [row(50, 10, 4.0), row(100, 10, 3.6), row(200, 10, 3.3),  # the ladder
+            row(50, 20, 3.8),                                         # data-axis point at 50M: one size, no trend
+            row(100, 10, 3.5, schedule="wsd")]                        # schedule check: not on the trend
+    series = scale_report.scale_series(rows, lambda r: (r["loss"],))
+    assert series == {10: [(50, 4.0), (100, 3.6), (200, 3.3)]}
