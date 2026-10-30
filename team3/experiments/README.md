@@ -43,3 +43,8 @@ Conventions used by every run:
 - Weight decay uses the optax convention (multiplied by the learning rate).
 - Muon uses update-RMS matching (`optim.muon_consistent_rms=0.2`), so it shares AdamW's learning-rate grid.
 - Run names: `team3-<experiment>-<optimizer>-lr<lr>-wd<wd>-s<seed>`, in `$GW1B_SCRATCH/teams/team3/runs`.
+
+Results: `gw1b python team3/analysis/scale_report.py $GW1B_SCRATCH/teams/team3/runs --out <dir>` reads every run
+(finished or still training) and writes tables and plots: each optimizer's best setting per size with its seed
+spread, the share of AdamW's tokens Muon needs to reach AdamW's final loss, and the trend of that share with model
+size. `--prefix team3-e1-` restricts it to one experiment. Live curves: `gw1b tensorboard $GW1B_SCRATCH/teams/team3/runs`.

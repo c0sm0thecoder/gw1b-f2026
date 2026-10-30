@@ -1,0 +1,70 @@
+"""Team 3 analysis: scale_report.py on fake run directories in the trainer's format.  Run:  python -m pytest tests -q"""
+import csv
+import json
+import os
+import sys
+
+import pytest
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+sys.path.insert(0, os.path.join(ROOT, "team3", "analysis"))
+
+import numpy as np  # noqa: E402
+
+from gw1b.config import load_config, save_config  # noqa: E402
+import scale_report  # noqa: E402
+
+SIZE_50M = os.path.join(ROOT, "configs", "team3", "e1_50m.yaml")
+
+
+def fake_run(root, name, opt, lr, final, seed=0, schedule="cosine", step_time=1.0, finished=True):
+    """A run whose validation loss falls linearly from final + 1 to `final` over 4 evaluations of 250M tokens."""
+    d = os.path.join(root, name)
+    os.makedirs(d)
+    cfg = load_config(SIZE_50M, [f"optim.name={opt}", f"optim.lr={lr}", f"run.seed={seed}",
+                                 f"optim.schedule={schedule}", f"run.name={name}"])
+    save_config(cfg, os.path.join(d, "config.yaml"))
+    with open(os.path.join(d, "metrics.jsonl"), "w") as f:
+        for i in range(4):
+            f.write(json.dumps({"step": i, "perf/step_time_s": step_time}) + "\n")
+        for i, loss in enumerate(np.linspace(final + 1, final, 4), start=1):
+            f.write(json.dumps({"step": 1000 * i, "tokens_seen": 250_000_000 * i, "val/loss": loss}) + "\n")
+    if finished:
+        json.dump({"finished": True}, open(os.path.join(d, "summary.json"), "w"))
+
+
+def test_tokens_to_reach_interpolates():
+    curve = np.array([[1.0, 5.0], [2.0, 4.0], [3.0, 3.0]])
+    assert scale_report.tokens_to_reach(curve, 3.5) == pytest.approx(2.5)
+    assert scale_report.tokens_to_reach(curve, 5.5) == 1.0
+    assert scale_report.tokens_to_reach(curve, 2.0) is None
+
+
+def test_scale_report_best_settings_and_multiplier(tmp_path):
+    runs = str(tmp_path / "runs")
+    fake_run(runs, "team3-e1-adamw-lr3e-4-wd0.1-s0", "adamw", 3e-4, 4.0)
+    fake_run(runs, "team3-e1-adamw-lr6e-4-wd0.1-s0", "adamw", 6e-4, 3.5)          # AdamW winner
+    fake_run(runs, "team3-e1-adamw-lr6e-4-wd0.1-s1", "adamw", 6e-4, 3.7, seed=1)
+    fake_run(runs, "team3-e1-muon-lr6e-4-wd0.1-s0", "muon", 6e-4, 3.0, step_time=1.1)  # Muon winner
+    fake_run(runs, "team3-e1-muon-lr1.2e-3-wd0.1-s0", "muon", 1.2e-3, 2.0, finished=False)  # unfinished: ignored
+    fake_run(runs, "team3-e1-muon-lr2.4e-3-wd0.1-s0", "muon", 2.4e-3, 3.2, step_time=1.1)
+    fake_run(runs, "team3-e1bwsd-muon-lr6e-4-wd0.1-s0", "muon", 6e-4, 2.9, schedule="wsd")  # separate group
+    fake_run(runs, "other-team-run", "adamw", 6e-4, 1.0)                              # not team3-: ignored
+    out = str(tmp_path / "report")
+    scale_report.main([runs, "--out", out])
+
+    best = {(r["group"], r["optimizer"]): r for r in csv.DictReader(open(os.path.join(out, "best.csv")))}
+    cosine = next(g for g, _ in best if "cosine" in g)
+    assert float(best[cosine, "adamw"]["lr"]) == 6e-4 and int(best[cosine, "adamw"]["n_seeds"]) == 2
+    assert float(best[cosine, "adamw"]["mean"]) == pytest.approx(3.6)
+    assert float(best[cosine, "muon"]["lr"]) == 6e-4                     # the unfinished 2.0 run does not count
+    assert any("wsd" in g for g, _ in best)
+
+    mult = {r["group"]: r for r in csv.DictReader(open(os.path.join(out, "multipliers.csv")))}[cosine]
+    # Muon's curve 4.0 -> 3.0 over 250M..1B tokens reaches AdamW's mean 3.6 at 550M tokens: 55% of AdamW's 1B
+    assert float(mult["token_share"]) == pytest.approx(0.55)
+    assert float(mult["step_time_ratio"]) == pytest.approx(1.1)
+    assert float(mult["time_share"]) == pytest.approx(0.605)
+    for f in ("runs.csv", "scale.png", f"curves_{cosine}.png", f"lr_{cosine}.png"):
+        assert os.path.exists(os.path.join(out, f)), f
