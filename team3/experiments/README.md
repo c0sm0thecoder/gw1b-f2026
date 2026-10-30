@@ -39,7 +39,9 @@ Conventions used by every run:
 - 10 training tokens per parameter at every size (0.5B at 50M, 1B at 100M, 2B at 200M, 3.5B at 350M), the ratio the
   A100 budget allows for the 1.15B production run, so the ladder predicts that run. The first E1 stage-1 sweep ran
   at 20 tokens per parameter (1B tokens) and is kept as the data-axis comparison at 50M. Warmup is half the class
-  recipe's, the same share of each (halved) run. Each optimizer's learning rate is tuned at every size.
+  recipe's, the same share of each (halved) run. Both optimizers receive equal tuning sweeps at 50M–200M.
+  The 350M pair is an extrapolation check at predicted learning rates, not an independently tuned comparison;
+  interpret its result with that limitation.
 - Every run is scored on the same 512 validation windows (`run.eval_seqs=512`).
 - Seeds are paired: `run.seed` (initialization) and `data.seed` (data order) take the same value.
 - Weight decay uses the optax convention (multiplied by the learning rate).
