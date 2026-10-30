@@ -37,6 +37,11 @@ from gw1b.config import load_config  # noqa: E402
 
 OPTIMIZERS = ("adamw", "muon")
 COLORS = {"adamw": "tab:blue", "muon": "tab:red"}
+GROUP_FIELDS = ["group", "params_m", "tok_per_param", "dtype", "schedule"]
+BEST_FIELDS = GROUP_FIELDS + ["optimizer", "lr", "wd", "mean", "sd", "n_seeds", "step_time_s"]
+MULT_FIELDS = GROUP_FIELDS + ["target", "muon_seeds_reaching", "muon_seeds", "token_share", "token_share_min",
+                              "token_share_max", "step_time_ratio", "time_share"]
+OUTPUTS = ("runs.csv", "best.csv", "multipliers.csv", "scale.png", "curves_*.png", "lr_*.png")  # all this script writes
 
 
 def load_run(run_dir: str) -> dict | None:
@@ -119,11 +124,10 @@ def multiplier(best: dict[str, dict]) -> dict | None:
             "step_time_ratio": step_ratio, "time_share": statistics.mean(shares) * step_ratio if all_reach else None}
 
 
-def write_csv(path: str, rows: list[dict]) -> None:
-    if not rows:
-        return
+def write_csv(path: str, rows: list[dict], fields: list[str]) -> None:
+    """Always writes the table, header only when there are no rows, so an empty result never leaves an old one."""
     with open(path, "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=list(rows[0]))
+        w = csv.DictWriter(f, fieldnames=fields)
         w.writeheader()
         w.writerows(rows)
 
@@ -206,12 +210,15 @@ def main(argv: list[str] | None = None) -> None:
     if not runs:
         raise SystemExit(f"no runs with validation points under {a.roots} matching {a.prefix}*")
     os.makedirs(a.out, exist_ok=True)
+    for pattern in OUTPUTS:  # a rerun into the same --out must not keep tables or plots of an earlier selection
+        for f in glob.glob(os.path.join(a.out, pattern)):
+            os.remove(f)
     groups: dict[str, list[dict]] = {}
     for r in runs:
         groups.setdefault(group_key(r), []).append(r)
 
-    write_csv(os.path.join(a.out, "runs.csv"), [
-        {k: v for k, v in r.items() if k != "curve"} | {"group": group_key(r)} for r in runs])
+    run_rows = [{k: v for k, v in r.items() if k != "curve"} | {"group": group_key(r)} for r in runs]
+    write_csv(os.path.join(a.out, "runs.csv"), run_rows, list(run_rows[0]))
     best_rows, mult_rows = [], []
     print(f"{len(runs)} runs in {len(groups)} group(s)")
     for r in runs:
@@ -237,15 +244,16 @@ def main(argv: list[str] | None = None) -> None:
             print(f"{'':<28} Muon reaches AdamW's {m['target']:.4f}: {share}; step time {m['step_time_ratio']:.2f}x"
                   + (f" -> {m['time_share']:.0%} of the time" if m["time_share"] is not None else ""))
         print()
-    write_csv(os.path.join(a.out, "best.csv"), best_rows)
-    write_csv(os.path.join(a.out, "multipliers.csv"), mult_rows)
+    write_csv(os.path.join(a.out, "best.csv"), best_rows, BEST_FIELDS)
+    write_csv(os.path.join(a.out, "multipliers.csv"), mult_rows, MULT_FIELDS)
 
     if not a.no_plots:
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         for key, group in groups.items():
-            plot_group(key, group, best_settings(group), a.out, plt)
+            if best := best_settings(group):  # nothing finished yet: no plot rather than an empty one
+                plot_group(key, group, best, a.out, plt)
         plot_scale(best_rows, mult_rows, a.out, plt)
     print(f"tables and plots -> {a.out}/")
 

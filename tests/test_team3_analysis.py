@@ -105,3 +105,22 @@ def test_scale_trend_keeps_token_budgets_apart():
             row(100, 10, 3.5, schedule="wsd")]                        # schedule check: not on the trend
     series = scale_report.scale_series(rows, lambda r: (r["loss"],))
     assert series == {10: [(50, 4.0), (100, 3.6), (200, 3.3)]}
+
+
+def test_rerun_into_same_out_leaves_nothing_stale(tmp_path):
+    runs = str(tmp_path / "runs")
+    fake_run(runs, "team3-e1-adamw-lr6e-4-wd0.1-s0", "adamw", 6e-4, 3.5)
+    fake_run(runs, "team3-e1-muon-lr6e-4-wd0.1-s0", "muon", 6e-4, 3.0)
+    fake_run(runs, "team3-e1b-adamw-lr6e-4-wd0.1-s0", "adamw", 6e-4, 3.4, finished=False)  # still training
+    out = str(tmp_path / "report")
+    scale_report.main([runs, "--out", out])
+    assert len(list(csv.DictReader(open(os.path.join(out, "multipliers.csv"))))) == 1
+    keep = os.path.join(out, "notes.txt")
+    open(keep, "w").write("not ours")
+
+    scale_report.main([runs, "--prefix", "team3-e1b-", "--out", out])  # no finished pair in this selection
+    for table in ("best.csv", "multipliers.csv"):
+        assert list(csv.DictReader(open(os.path.join(out, table)))) == []  # header only, not the old rows
+    assert [r["run"] for r in csv.DictReader(open(os.path.join(out, "runs.csv")))] == ["team3-e1b-adamw-lr6e-4-wd0.1-s0"]
+    assert not [f for f in os.listdir(out) if f.startswith(("curves_", "lr_"))]  # the first run's plots are gone
+    assert os.path.exists(keep)                                       # files the script did not write stay
