@@ -54,7 +54,7 @@ def test_scale_report_best_settings_and_multiplier(tmp_path):
     fake_run(runs, "other-team-run", "adamw", 6e-4, 1.0)                              # not team3-: ignored
     fake_run(runs, "team3-e0-pilot-adamw-50m", "adamw", 6e-4, 1.0)                    # E0 pilot: excluded
     out = str(tmp_path / "report")
-    scale_report.main([runs, "--out", out])
+    scale_report.main([runs, "--out", out, "--no-plots"])  # plots: test_plots_are_written (needs matplotlib)
 
     assert all("e0-pilot" not in r["run"] for r in csv.DictReader(open(os.path.join(out, "runs.csv"))))
     best = {(r["group"], r["optimizer"]): r for r in csv.DictReader(open(os.path.join(out, "best.csv")))}
@@ -69,7 +69,18 @@ def test_scale_report_best_settings_and_multiplier(tmp_path):
     assert float(mult["token_share"]) == pytest.approx(0.55)
     assert float(mult["step_time_ratio"]) == pytest.approx(1.1)
     assert float(mult["time_share"]) == pytest.approx(0.605)
-    for f in ("runs.csv", "scale.png", f"curves_{cosine}.png", f"lr_{cosine}.png"):
+    assert os.path.exists(os.path.join(out, "runs.csv"))
+
+
+def test_plots_are_written(tmp_path):
+    pytest.importorskip("matplotlib")  # not in the class CI's package list; installed on Pegasus
+    runs = str(tmp_path / "runs")
+    fake_run(runs, "team3-e1-adamw-lr6e-4-wd0.1-s0", "adamw", 6e-4, 3.5)
+    fake_run(runs, "team3-e1-muon-lr6e-4-wd0.1-s0", "muon", 6e-4, 3.0)
+    out = str(tmp_path / "report")
+    scale_report.main([runs, "--out", out])
+    (group,) = {r["group"] for r in csv.DictReader(open(os.path.join(out, "runs.csv")))}
+    for f in ("scale.png", f"curves_{group}.png", f"lr_{group}.png"):
         assert os.path.exists(os.path.join(out, f)), f
 
 
@@ -113,16 +124,18 @@ def test_rerun_into_same_out_leaves_nothing_stale(tmp_path):
     fake_run(runs, "team3-e1-muon-lr6e-4-wd0.1-s0", "muon", 6e-4, 3.0)
     fake_run(runs, "team3-e1b-adamw-lr6e-4-wd0.1-s0", "adamw", 6e-4, 3.4, finished=False)  # still training
     out = str(tmp_path / "report")
-    scale_report.main([runs, "--out", out])
+    scale_report.main([runs, "--out", out, "--no-plots"])
     assert len(list(csv.DictReader(open(os.path.join(out, "multipliers.csv"))))) == 1
+    for old_plot in ("scale.png", "curves_old.png", "lr_old.png"):  # as an earlier report with plots leaves them
+        open(os.path.join(out, old_plot), "w").close()
     keep = os.path.join(out, "notes.txt")
     open(keep, "w").write("not ours")
 
-    scale_report.main([runs, "--prefix", "team3-e1b-", "--out", out])  # no finished pair in this selection
+    scale_report.main([runs, "--prefix", "team3-e1b-", "--out", out, "--no-plots"])  # no finished pair here
     for table in ("best.csv", "multipliers.csv"):
         assert list(csv.DictReader(open(os.path.join(out, table)))) == []  # header only, not the old rows
     assert [r["run"] for r in csv.DictReader(open(os.path.join(out, "runs.csv")))] == ["team3-e1b-adamw-lr6e-4-wd0.1-s0"]
-    assert not [f for f in os.listdir(out) if f.startswith(("curves_", "lr_"))]  # the first run's plots are gone
+    assert not [f for f in os.listdir(out) if f.endswith(".png")]  # the earlier report's plots are gone
     assert os.path.exists(keep)                                       # files the script did not write stay
 
 
