@@ -55,7 +55,10 @@ Conventions used by every run:
 Results: `gw1b python team3/analysis/scale_report.py $GW1B_SCRATCH/teams/team3/runs --out <dir>` reads every run
 (finished or still training) and writes tables and plots: each optimizer's best setting per size with its seed
 spread, the share of AdamW's tokens Muon needs to reach AdamW's final loss, and the trend of that share with model
-size. `--prefix team3-e1-` restricts it to one experiment. Live curves: `gw1b tensorboard $GW1B_SCRATCH/teams/team3/runs`.
+size. WSD cooldown fractions are separate groups (for example, `wsd-decay0.1` and `wsd-decay0.3`);
+`decay_fraction` is included in the CSV tables and is blank for other schedules. Repeated seeds are combined
+only within their cooldown group. Regenerate any reports that previously combined WSD cooldown lengths.
+`--prefix team3-e1-` restricts it to one experiment. Live curves: `gw1b tensorboard $GW1B_SCRATCH/teams/team3/runs`.
 
 Branches (`branch.py`): a branch copies one checkpoint of a longer run into a new run directory, with the longer
 run's metrics up to that step, and `gw1b train` finishes it from there. The tool refuses unless the branch would

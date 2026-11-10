@@ -4,7 +4,7 @@
     gw1b python team3/analysis/scale_report.py <runs dir> --prefix team3-e1- --out e1_report   # one experiment
 
 Reads every run directory (config.yaml + metrics.jsonl, summary.json once finished) and groups runs by model size,
-tokens per parameter, exact token budget, precision and schedule. E0 pilots are left out (--exclude). Per group it picks each optimizer's
+tokens per parameter, exact token budget, precision and schedule (including WSD cooldown fraction). E0 pilots are left out (--exclude). Per group it picks each optimizer's
 best setting (lowest final validation loss at seed 0, finished runs only; diverged runs, whose loss is not finite,
 never win) and averages its seeds. Writes to --out:
 
@@ -38,7 +38,7 @@ from gw1b.config import load_config  # noqa: E402
 
 OPTIMIZERS = ("adamw", "muon")
 COLORS = {"adamw": "tab:blue", "muon": "tab:red"}
-GROUP_FIELDS = ["group", "params_m", "tok_per_param", "dtype", "schedule"]
+GROUP_FIELDS = ["group", "params_m", "tok_per_param", "dtype", "schedule", "decay_fraction"]
 BEST_FIELDS = GROUP_FIELDS + ["optimizer", "lr", "wd", "mean", "sd", "n_seeds", "step_time_s"]
 MULT_FIELDS = GROUP_FIELDS + ["target", "muon_seeds_reaching", "muon_seeds", "token_share", "token_share_min",
                               "token_share_max", "step_time_ratio", "time_share"]
@@ -64,7 +64,9 @@ def load_run(run_dir: str) -> dict | None:
     return {
         "run": os.path.basename(run_dir.rstrip("/")),
         "optimizer": cfg.optim.name, "lr": cfg.optim.lr, "wd": cfg.optim.weight_decay, "seed": cfg.run.seed,
-        "schedule": cfg.optim.schedule, "dtype": cfg.model.dtype, "params_m": round(cfg.model.n_params / 1e6),
+        "schedule": cfg.optim.schedule,
+        "decay_fraction": cfg.optim.decay_fraction if cfg.optim.schedule == "wsd" else None,
+        "dtype": cfg.model.dtype, "params_m": round(cfg.model.n_params / 1e6),
         "tokens_planned": cfg.resolved_total_steps() * cfg.tokens_per_step,
         "tok_per_param": round(cfg.resolved_total_steps() * cfg.tokens_per_step / cfg.model.n_params),
         "finished": finished, "curve": curve, "final_val": float(curve[-1, 1]),
@@ -74,7 +76,10 @@ def load_run(run_dir: str) -> dict | None:
 
 
 def group_key(r: dict) -> str:
-    return f"{r['params_m']}M-{r['tok_per_param']}tpp-{r['dtype']}-{r['schedule']}-{r['tokens_planned']}tok"
+    schedule = r["schedule"]
+    if schedule == "wsd":
+        schedule += f"-decay{r['decay_fraction']}"
+    return f"{r['params_m']}M-{r['tok_per_param']}tpp-{r['dtype']}-{schedule}-{r['tokens_planned']}tok"
 
 
 def tokens_to_reach(curve: np.ndarray, target: float) -> float | None:
@@ -235,7 +240,7 @@ def main(argv: list[str] | None = None) -> None:
         best, g0 = best_settings(groups[key]), groups[key][0]
         for opt, b in best.items():
             best_rows.append({"group": key, "params_m": g0["params_m"], "tok_per_param": g0["tok_per_param"],
-                              "dtype": g0["dtype"], "schedule": g0["schedule"],
+                              "dtype": g0["dtype"], "schedule": g0["schedule"], "decay_fraction": g0["decay_fraction"],
                               "optimizer": opt, "lr": b["lr"], "wd": b["wd"], "mean": b["mean"], "sd": b["sd"],
                               "n_seeds": len(b["seeds"]), "step_time_s": b["step_time_s"]})
             print(f"{key:<28} {opt:<6} best lr {b['lr']:<8g} wd {b['wd']:<5g} "
@@ -243,7 +248,8 @@ def main(argv: list[str] | None = None) -> None:
         m = multiplier(best)
         if m:
             mult_rows.append({"group": key, "params_m": g0["params_m"], "tok_per_param": g0["tok_per_param"],
-                              "dtype": g0["dtype"], "schedule": g0["schedule"]} | m)
+                              "dtype": g0["dtype"], "schedule": g0["schedule"],
+                              "decay_fraction": g0["decay_fraction"]} | m)
             n = f"{m['muon_seeds_reaching']}/{m['muon_seeds']} seeds"
             share = (f"{m['token_share']:.0%} of the tokens ({n})" if m["token_share"] is not None
                      else f"not reached by every seed ({n} reach it)")
