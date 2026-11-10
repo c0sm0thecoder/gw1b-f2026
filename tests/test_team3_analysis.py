@@ -3,6 +3,7 @@ import csv
 import json
 import os
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -18,13 +19,13 @@ import scale_report  # noqa: E402
 SIZE_50M = os.path.join(ROOT, "configs", "team3", "e1_50m.yaml")       # 10 tokens/parameter
 
 
-def fake_run(root, name, opt, lr, final, seed=0, schedule="cosine", step_time=1.0, finished=True, losses=None):
+def fake_run(root, name, opt, lr, final, seed=0, schedule="cosine", step_time=1.0, finished=True, losses=None, decay_fraction=0.1):
     """A run whose validation loss falls linearly from final + 1 to `final` over 4 evaluations of 250M tokens
     (or follows `losses`)."""
     d = os.path.join(root, name)
     os.makedirs(d)
     cfg = load_config(SIZE_50M, [f"optim.name={opt}", f"optim.lr={lr}", f"run.seed={seed}",
-                                 f"optim.schedule={schedule}", f"run.name={name}"])
+                                 f"optim.schedule={schedule}", f"optim.decay_fraction={decay_fraction}", f"run.name={name}"])
     save_config(cfg, os.path.join(d, "config.yaml"))
     with open(os.path.join(d, "metrics.jsonl"), "w") as f:
         for i in range(4):
@@ -167,3 +168,48 @@ def test_empty_selection_clears_old_outputs(tmp_path):
     with pytest.raises(SystemExit, match='no runs'):
         scale_report.main([runs, '--prefix', 'absent-', '--out', out, '--no-plots'])
     assert not any(os.path.exists(os.path.join(out, f)) for f in ('runs.csv', 'best.csv', 'multipliers.csv'))
+
+
+@pytest.mark.parametrize("plots", [False, True])
+def test_wsd_cooldowns_keep_seeds_and_multipliers_separate(tmp_path, plots):
+    if plots:
+        pytest.importorskip("matplotlib")
+    runs, out = str(tmp_path / "runs"), str(tmp_path / "report")
+    for decay, adamw_loss in [(0.1, 4.0), (0.2, 3.8), (0.3, 3.6)]:
+        for opt in ("adamw", "muon"):
+            for seed in (0, 1):
+                # Only WSD10's second Muon seed fails to reach its own AdamW target.
+                loss = adamw_loss if opt == "adamw" else adamw_loss - 0.5
+                if decay == 0.1 and opt == "muon" and seed == 1:
+                    loss = adamw_loss + 0.1
+                fake_run(runs, f"team3-wsd{decay}-{opt}-s{seed}", opt, 6e-4, loss,
+                         seed=seed, schedule="wsd", decay_fraction=decay)
+    scale_report.main([runs, "--out", out] + ([] if plots else ["--no-plots"]))
+    best = list(csv.DictReader(open(os.path.join(out, "best.csv"))))
+    assert len(best) == 6
+    assert {float(r["decay_fraction"]) for r in best} == {0.1, 0.2, 0.3}
+    assert all(int(r["n_seeds"]) == 2 for r in best)
+    for row in best:
+        if row["optimizer"] == "adamw":
+            expected = {0.1: 4.0, 0.2: 3.8, 0.3: 3.6}[float(row["decay_fraction"])]
+            assert float(row["mean"]) == pytest.approx(expected)
+    mults = {float(r["decay_fraction"]): r for r in
+             csv.DictReader(open(os.path.join(out, "multipliers.csv")))}
+    assert mults[0.1]["muon_seeds_reaching"] == "1"
+    assert mults[0.1]["token_share"] == ""
+    assert all(mults[d]["muon_seeds_reaching"] == "2" for d in (0.2, 0.3))
+    rows = list(csv.DictReader(open(os.path.join(out, "runs.csv"))))
+    assert {float(r["decay_fraction"]) for r in rows} == {0.1, 0.2, 0.3}
+    if plots:
+        assert len(list(Path(out).glob("curves_*.png"))) == 3
+        assert len(list(Path(out).glob("lr_*.png"))) == 3
+
+
+def test_non_wsd_ignores_unused_cooldown(tmp_path):
+    runs = str(tmp_path / "runs")
+    for seed, decay in [(0, 0.1), (1, 0.3)]:
+        fake_run(runs, f"team3-cosine-s{seed}", "adamw", 6e-4, 3.5,
+                 seed=seed, decay_fraction=decay)
+    loaded = [scale_report.load_run(os.path.join(runs, n)) for n in os.listdir(runs)]
+    assert len({scale_report.group_key(r) for r in loaded}) == 1
+    assert all(r["decay_fraction"] is None for r in loaded)
