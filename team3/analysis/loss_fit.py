@@ -1,7 +1,8 @@
 """Scaling fit: predict GW-1B's loss at 20 and 30 tokens/parameter, with uncertainty, from the ladder runs.
 
 gw1b python team3/analysis/scale_report.py $GW1B_SCRATCH/teams/team3/runs --out team3_report --no-plots
-python team3/analysis/loss_fit.py team3_report/best.csv --out fit.csv
+gw1b python team3/analysis/scale_report.py $GW1B_SCRATCH/teams/team3/runs --prefix team3-e6- --out team3_report_e6 --no-plots
+python team3/analysis/loss_fit.py team3_report/best.csv --token-best team3_report_e6/best.csv --out fit.csv
 
 Input is best.csv from scale_report.py (each optimizer's best setting per model size, tokens/parameter, schedule). Needs
 only numpy, so it also runs off the cluster. Per optimizer the prediction is separable:
@@ -55,6 +56,15 @@ def load_best(path: str, dtype: str | None = "float32") -> list[dict]:
     """Rows of scale_report's best.csv; `dtype` keeps one precision so bf16 and float32 runs never mix."""
     with open(path, newline="") as f:
         return [parse_row(r) for r in csv.DictReader(f) if not dtype or r["dtype"] == dtype]
+
+
+def use_token_runs(rows: list[dict], token_rows: list[dict], schedule: str) -> list[dict]:
+    """`rows` with every `schedule` row replaced by the ones from `token_rows`.
+
+    scale_report.py groups by schedule name only, so a WSD row of the full report can pool runs with other cooldown
+    lengths (E2). A report of the E6 runs alone (--prefix team3-e6-) has one run per point, trunk-matched.
+    """
+    return [r for r in rows if r["schedule"] != schedule] + [r for r in token_rows if r["schedule"] == schedule]
 
 
 def points(rows: list[dict], optimizer: str, schedule: str, tpp: int) -> dict[float, dict]:
@@ -224,6 +234,8 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--tpp", type=int, nargs="+", default=[20, 30], help="tokens/parameter to predict")
     ap.add_argument("--size-schedule", default="cosine", help="schedule of the size ladder")
     ap.add_argument("--token-schedule", default="wsd", help="schedule of the runs that give the token axis")
+    ap.add_argument("--token-best", help="best.csv of scale_report.py --prefix team3-e6-: its --token-schedule rows "
+                                         "replace those of best_csv, so the token axis uses only the E6 runs")
     ap.add_argument("--dtype", default="float32", help="precision of the runs to use ('' keeps all)")
     ap.add_argument("--irreducible", type=float, default=0.0, help="loss floor E in L = E + a * N**-b")
     ap.add_argument("--n-boot", type=int, default=2000)
@@ -234,6 +246,8 @@ def main(argv: list[str] | None = None) -> None:
     spec = Spec(a.target_params_m, a.base_tpp, tuple(t for t in a.tpp if t != a.base_tpp), a.size_schedule,
                 a.token_schedule, a.irreducible)
     rows = load_best(a.best_csv, a.dtype)
+    if a.token_best:
+        rows = use_token_runs(rows, load_best(a.token_best, a.dtype), a.token_schedule)
     fit = run_fit(rows, spec, a.n_boot, a.seed)
     table = summarize(fit, spec)
     print(report(rows, fit, spec, table))

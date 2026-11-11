@@ -146,6 +146,23 @@ def test_e1_numbers_from_the_learning_rate_sheet():
     assert pred["muon"][10] < pred["adamw"][10]
 
 
+def test_token_runs_from_a_second_report_replace_the_pooled_wsd_rows(tmp_path):
+    """A full report can pool WSD runs of other cooldown lengths into the 10 tok/param row; the E6 report does not."""
+    pooled = [r | {"mean": r["mean"] * 1.05} if r["schedule"] == "wsd" and r["tok_per_param"] == 10 else r
+              for r in exact_rows()]
+    spec = loss_fit.Spec()
+    clean = A * 1150 ** -B * 0.95
+    assert loss_fit.predict_optimizer(parsed(pooled), "adamw", spec)[20] != pytest.approx(clean)
+    merged = loss_fit.use_token_runs(parsed(pooled), parsed(exact_rows()), "wsd")
+    assert loss_fit.predict_optimizer(merged, "adamw", spec)[20] == pytest.approx(clean)
+    best, e6, out = (str(tmp_path / n) for n in ("best.csv", "e6.csv", "fit.csv"))
+    write_best(best, pooled)
+    write_best(e6, [r for r in exact_rows() if r["schedule"] == "wsd"])
+    loss_fit.main([best, "--token-best", e6, "--n-boot", "20", "--out", out])
+    got = {(r["quantity"], r["optimizer"], r["tok_per_param"]): float(r["value"]) for r in csv.DictReader(open(out))}
+    assert got["loss", "adamw", "20"] == pytest.approx(clean)
+
+
 def test_cli_prints_and_writes_the_table(tmp_path, capsys):
     best, out = str(tmp_path / "best.csv"), str(tmp_path / "fit.csv")
     write_best(best, exact_rows(sd=0.02))
