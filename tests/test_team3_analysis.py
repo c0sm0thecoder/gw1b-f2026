@@ -19,13 +19,15 @@ import scale_report  # noqa: E402
 SIZE_50M = os.path.join(ROOT, "configs", "team3", "e1_50m.yaml")       # 10 tokens/parameter
 
 
-def fake_run(root, name, opt, lr, final, seed=0, schedule="cosine", step_time=1.0, finished=True, losses=None, decay_fraction=0.1):
+def fake_run(root, name, opt, lr, final, seed=0, schedule="cosine", step_time=1.0, finished=True, losses=None,
+             decay_fraction=0.1, min_lr_ratio=0.1):
     """A run whose validation loss falls linearly from final + 1 to `final` over 4 evaluations of 250M tokens
     (or follows `losses`)."""
     d = os.path.join(root, name)
     os.makedirs(d)
     cfg = load_config(SIZE_50M, [f"optim.name={opt}", f"optim.lr={lr}", f"run.seed={seed}",
-                                 f"optim.schedule={schedule}", f"optim.decay_fraction={decay_fraction}", f"run.name={name}"])
+                                 f"optim.schedule={schedule}", f"optim.decay_fraction={decay_fraction}",
+                                 f"optim.min_lr_ratio={min_lr_ratio}", f"run.name={name}"])
     save_config(cfg, os.path.join(d, "config.yaml"))
     with open(os.path.join(d, "metrics.jsonl"), "w") as f:
         for i in range(4):
@@ -213,3 +215,30 @@ def test_non_wsd_ignores_unused_cooldown(tmp_path):
     loaded = [scale_report.load_run(os.path.join(runs, n)) for n in os.listdir(runs)]
     assert len({scale_report.group_key(r) for r in loaded}) == 1
     assert all(r["decay_fraction"] is None for r in loaded)
+
+
+@pytest.mark.parametrize("plots", [False, True])
+def test_wsd_min_lr_ratios_keep_groups_separate(tmp_path, plots):
+    if plots:
+        pytest.importorskip("matplotlib")
+    runs, out = str(tmp_path / "runs"), str(tmp_path / "report")
+    for ratio in (0.0, 0.1):
+        for opt in ("adamw", "muon"):
+            fake_run(runs, f"team3-wsd30-{opt}-minlr{ratio}", opt, 6e-4,
+                     4.0 if opt == "adamw" else 3.5, schedule="wsd",
+                     decay_fraction=0.3, min_lr_ratio=ratio)
+    scale_report.main([runs, "--out", out] + ([] if plots else ["--no-plots"]))
+    for filename in ("runs.csv", "best.csv", "multipliers.csv"):
+        with open(os.path.join(out, filename)) as handle:
+            rows = list(csv.DictReader(handle))
+        assert len({row["group"] for row in rows}) == 2
+        assert {float(row["min_lr_ratio"]) for row in rows} == {0.0, 0.1}
+        assert all(float(row["decay_fraction"]) == 0.3 for row in rows)
+        if filename == "best.csv":
+            assert len(rows) == 4
+            assert all(int(row["n_seeds"]) == 1 for row in rows)
+        if filename == "multipliers.csv":
+            assert all(int(row["muon_seeds"]) == 1 for row in rows)
+    if plots:
+        assert len(list(Path(out).glob("curves_*.png"))) == 2
+        assert len(list(Path(out).glob("lr_*.png"))) == 2
